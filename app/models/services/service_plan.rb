@@ -38,13 +38,29 @@ module VCAP::CloudController
       ).&(active: true))
     end
 
-    def self.user_visibility_filter(user)
-      included_ids = ServicePlanVisibility.visible_private_plan_ids_for_user(user).
-                     concat(plan_ids_from_private_brokers(user))
+    def self.user_visible(user, admin_override=false, op=nil)
+      dataset.filter(user_visibility(user, admin_override, op))
+    end
 
-      Sequel.or(
-        { public: true, id: included_ids }
-      ).&(active: true)
+    def self.user_visibility(user, admin_override, op=nil)
+      if !admin_override && user
+        user_visibility_filter(user, op)
+      else
+        super(user, admin_override)
+      end
+    end
+
+    def self.user_visibility_filter(user, op=nil)
+      included_ids = ServicePlanVisibility.visible_private_plan_ids_for_user(user).
+        concat(plan_ids_from_private_brokers(user))
+
+      filter = Sequel.or({ public: true, id: included_ids }).&(active: true)
+
+      if op == :read
+        filter = filter.|({id: plan_ids_for_visible_service_instances(user)})
+      end
+
+      filter
     end
 
     def self.plan_ids_from_private_brokers(user)
@@ -55,8 +71,20 @@ module VCAP::CloudController
         map(&:id).flatten.uniq
     end
 
+    def self.plan_ids_for_visible_service_instances(user)
+      plan_ids = []
+      user.spaces.each do |space|
+        space.service_instances.each do |service_instance|
+          plan_ids << service_instance.service_plan.id
+        end
+      end
+      plan_ids
+    end
+
     def bindable?
-      return bindable unless bindable.nil?
+      return bindable if bindable
+      ### IS THIS NECESSARY?
+      service = Service.first(id: self.service_id) unless service
       service.bindable?
     end
 
